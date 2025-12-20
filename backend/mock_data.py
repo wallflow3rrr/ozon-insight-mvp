@@ -45,6 +45,7 @@ class MockDB:
         for j in range(5):
             sku = f"SKU{j+1}"
             products[sku] = {
+                "sku": sku,  # ✅ Добавляем поле sku
                 "name": f"Товар {j+1}",
                 "revenue": 0,
                 "quantity_sold": 0,
@@ -92,24 +93,30 @@ class MockDB:
             if logistics == "both" or data["logistics"] == logistics:
                 filtered_products[sku] = data
         print(f"DEBUG: Filtered products count: {len(filtered_products)}")  # ✅ Отладка
+        print(f"DEBUG: Filtered products (before sort): {list(filtered_products.values())}")  # ✅ Отладка
 
         if not filtered_products:
             print("DEBUG: No products after logistics filter")  # ✅ Отладка
             return None
 
-        # Агрегируем метрики по отфильтрованным товарам
-        total_revenue = sum(p["revenue"] for p in filtered_products.values())
-        total_orders = sum(p["quantity_sold"] for p in filtered_products.values())
+        # АГРЕГАЦИЯ ПО ОТФИЛЬТРОВАННЫМ МЕТРИКАМ
+        total_revenue = sum(m.revenue for m in filtered_metrics)
+        total_orders = sum(m.orders for m in filtered_metrics)
         avg_check = total_revenue / total_orders if total_orders > 0 else 0
         total_returns = sum(m.returns for m in filtered_metrics)
         return_rate = (total_returns / total_orders * 100) if total_orders > 0 else 0
 
-        # Формируем список ТОП-5 товаров из отфильтрованных
+        # ✅ Формируем список ВСЕХ отфильтрованных товаров (для других целей)
+        all_filtered_products_list = list(filtered_products.values())
+
+        # Формируем список ТОП-5 товаров из ОТФИЛЬТРОВАННЫХ ПО ЛОГИСТИКЕ
         top_products = sorted(
-            filtered_products.values(),
-            key=lambda x: x["revenue"],
+            all_filtered_products_list,
+            key=lambda x: x["revenue"],  # Общая выручка
             reverse=True
         )[:5]
+
+        print(f"DEBUG: Top 5 products (after sort): {top_products}")  # ✅ Отладка
 
         top_products_converted = [
             ProductSummary(
@@ -122,6 +129,18 @@ class MockDB:
             for p in top_products
         ]
 
+        # ✅ Конвертируем все отфильтрованные товары
+        all_filtered_converted = [
+            ProductSummary(
+                sku=p["name"].replace(" ", ""),
+                name=p["name"],
+                revenue=p["revenue"],
+                stock=p["stock"],
+                logistics=p["logistics"]
+            )
+            for p in all_filtered_products_list
+        ]
+
         result = {
             "kpi": {
                 "revenue": total_revenue,
@@ -129,10 +148,12 @@ class MockDB:
                 "avg_check": round(avg_check, 2),
                 "return_rate": round(return_rate, 2)
             },
-            "revenue_chart": [{"date": m.date, "value": m.revenue} for m in filtered_metrics[-30:]],
-            "top_products": top_products_converted
+            "revenue_chart": [{"date": m.date, "value": m.revenue} for m in filtered_metrics[-30:]], # последние 30 дней в фильтре
+            "top_products": top_products_converted,
+            # ✅ Добавим все отфильтрованные товары
+            "all_filtered_products": all_filtered_converted
         }
-        print(f"DEBUG: Returning dashboard data: {result}")  # ✅ Отладка
+        print(f"DEBUG: Returning dashboard  {result}")  # ✅ Отладка
         return result
 
     def get_product_detail(self, user_id: str, sku: str):

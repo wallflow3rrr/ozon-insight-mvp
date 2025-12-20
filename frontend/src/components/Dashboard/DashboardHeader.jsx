@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useAppContext } from '../../context/AppContext';
 import { PERIODS, LOGISTICS_TYPES } from '../../utils/constants';
-import { api } from '../../services/api';
+//import { api } from '../../services/api';
 import Button from '../UI/Button';
 
 const DashboardHeader = ({ onSync }) => {

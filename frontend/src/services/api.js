@@ -1,11 +1,8 @@
-// ... остальные импорты ...
-
 const API_BASE_URL = 'http://localhost:8000';
 
 export const api = {
   // Синхронизация
   getSyncStatus: () => fetch(`${API_BASE_URL}/api/sync/status`).then(res => res.json()),
-  // ✅ Сделаем triggerSync асинхронной функцией, возвращающей Promise
   triggerSync: () => fetch(`${API_BASE_URL}/api/sync/trigger`, { method: 'POST' }).then(res => res.json()),
 
   // Дашборд
@@ -14,6 +11,29 @@ export const api = {
       if (!res.ok) {
         if (res.status === 404) {
           throw new Error('No dashboard data found');
+        }
+        throw new Error(`HTTP error! status: ${res.status}`);
+      }
+      return res.json();
+    }),
+
+  // ✅ Новые эндпоинты
+  getStockData: (period, logistics) => 
+    fetch(`${API_BASE_URL}/api/stock?period=${period}&logistics=${logistics}`).then(res => {
+      if (!res.ok) {
+        if (res.status === 404) {
+          throw new Error('No stock data found');
+        }
+        throw new Error(`HTTP error! status: ${res.status}`);
+      }
+      return res.json();
+    }),
+
+  getLogisticsData: (period, logistics) => 
+    fetch(`${API_BASE_URL}/api/logistics?period=${period}&logistics=${logistics}`).then(res => {
+      if (!res.ok) {
+        if (res.status === 404) {
+          throw new Error('No logistics data found');
         }
         throw new Error(`HTTP error! status: ${res.status}`);
       }

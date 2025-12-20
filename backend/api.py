@@ -144,3 +144,77 @@ def get_metric_tooltip(metric_key: str):
     if not tooltip:
         raise HTTPException(status_code=404, detail="Tooltip not found")
     return tooltip
+
+@router.get("/api/stock")
+def get_stock_data(
+    period: int = 30,
+    logistics: str = "both",
+    user_id: str = Depends(mock_auth)
+):
+    # Получаем ОТФИЛЬТРОВАННЫЕ данные через основной метод
+    data = db.get_dashboard_data(user_id, period, logistics)
+    if not data:
+        raise HTTPException(status_code=404, detail="No stock data found")
+
+    # ✅ Используем все отфильтрованные товары (уже отфильтрованы по logistics)
+    # `all_filtered_products` — это список ProductSummary
+    all_filtered_products = data.get("all_filtered_products", [])
+
+    # ✅ Теперь low_stock_products — это все товары с низким остатком из отфильтрованных
+    # ВАЖНО: `period` влияет на `all_filtered_products` через `get_dashboard_data`, если в нём реализована логика фильтрации остатков по периоду.
+    # В текущей заглушке `stock` — это *текущий остаток*, он **не зависит от `period`**.
+    # Поэтому фильтр по `period` на `low_stock_products` **не влияет**, но влияет на `logistics`.
+    # Это компромисс для MVP.
+    low_stock_list = [p for p in all_filtered_products if p.stock < 5]
+
+    transformed_data = {
+        "total_products": len(all_filtered_products),
+        "total_stock_value": sum(p.stock for p in all_filtered_products) * 1000,
+        "low_stock_count": sum(1 for p in all_filtered_products if p.stock < 5),
+        "out_of_stock_count": sum(1 for p in all_filtered_products if p.stock == 0),
+        "stock_by_warehouse": [
+            {"name": "Склад 1", "stock": sum(p.stock for p in all_filtered_products if p.logistics == "FBO")},
+            {"name": "Склад 2", "stock": sum(p.stock for p in all_filtered_products if p.logistics == "FBS")},
+        ],
+        # ✅ Теперь это список всех товаров с низким остатком из отфильтрованных
+        "low_stock_products": low_stock_list
+    }
+    return transformed_data
+
+@router.get("/api/logistics")
+def get_logistics_data(
+    period: int = 30,
+    logistics: str = "both",
+    user_id: str = Depends(mock_auth)
+):
+    # Получаем данные через основной метод
+    data = db.get_dashboard_data(user_id, period, logistics)
+    if not data:
+        raise HTTPException(status_code=404, detail="No logistics data found")
+
+    # ✅ Используем все отфильтрованные товары, а не только ТОП-5
+    all_filtered_products = data.get("all_filtered_products", [])
+
+    # Примерная логика агрегации по логистике на основе отфильтрованных товаров
+    fbo_count = sum(1 for p in all_filtered_products if p.logistics == "FBO")
+    fbs_count = sum(1 for p in all_filtered_products if p.logistics == "FBS")
+
+    transformed_data = {
+        "total_orders_fbo": fbo_count * 10,  # Пример
+        "total_orders_fbs": fbs_count * 10,  # Пример
+        "avg_delivery_time_fbo": 3.2,  # Пример
+        "avg_delivery_time_fbs": 5.1,  # Пример
+        "total_logistics_cost": 45000,  # Пример
+        "logistics_cost_fbo": 25000,  # Пример
+        "logistics_cost_fbs": 20000,  # Пример
+        "delivery_chart": [  # Пример
+            {"date": "2025-01-01", "fbo": fbo_count, "fbs": fbs_count},
+            {"date": "2025-01-02", "fbo": fbo_count - 1, "fbs": fbs_count + 1},
+            {"date": "2025-01-03", "fbo": fbo_count + 2, "fbs": fbs_count - 1},
+        ],
+        "cost_by_type": [  # Пример
+            {"type": "FBO", "cost": 25000},
+            {"type": "FBS", "cost": 20000},
+        ]
+    }
+    return transformed_data
