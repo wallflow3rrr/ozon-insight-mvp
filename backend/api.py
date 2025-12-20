@@ -58,29 +58,43 @@ def export_report(
     sku: str = None,
     user_id: str = Depends(mock_auth)
 ):
+    # ✅ Проверим, что sku передан, если scope === "product"
     if scope == "product" and not sku:
         raise HTTPException(status_code=400, detail="Invalid export scope or missing SKU")
 
+    # --- Генерация данных для экспорта ---
     if scope == "dashboard":
         data = db.get_dashboard_data(user_id, period, logistics)
+        print(f"DEBUG: Dashboard data fetched: {data}")  # ✅ Отладка
         if not data:
-            raise HTTPException(status_code=404, detail="No data to export")
+            print("DEBUG: Dashboard data is None or empty, raising 404")  # ✅ Отладка
+            raise HTTPException(status_code=404, detail="No dashboard data found")
+        # ✅ Исправленный доступ к данным:
         export_data = [
-            {"metric": "revenue", "value": data["kpi"].revenue},
-            {"metric": "orders", "value": data["kpi"].orders},
-            {"metric": "avg_check", "value": data["kpi"].avg_check},
-            {"metric": "return_rate", "value": data["kpi"].return_rate},
+            {"metric": "revenue", "value": data["kpi"]["revenue"]},
+            {"metric": "orders", "value": data["kpi"]["orders"]},
+            {"metric": "avg_check", "value": data["kpi"]["avg_check"]},
+            {"metric": "return_rate", "value": data["kpi"]["return_rate"]},
         ]
         filename = f"dashboard_{period}_{logistics}.xlsx"
     elif scope == "top_products":
         data = db.get_dashboard_data(user_id, period, logistics)
+        print(f"DEBUG: Top products data fetched: {data}")  # ✅ Отладка
+        if not data:
+            print("DEBUG: Top products data is None or empty, raising 404")  # ✅ Отладка
+            raise HTTPException(status_code=404, detail="No dashboard data found")
+        # ✅ Исправленный доступ к данным:
         export_data = [
-            {"SKU": p.sku, "Name": p.name, "Revenue": p.revenue, "Stock": p.stock, "Logistics": p.logistics}
+            {"SKU": p["sku"], "Name": p["name"], "Revenue": p["revenue"], "Stock": p["stock"], "Logistics": p["logistics"]}
             for p in data["top_products"]
         ]
         filename = f"top_products_{period}_{logistics}.xlsx"
     elif scope == "product" and sku:
         detail = db.get_product_detail(user_id, sku)
+        print(f"DEBUG: Product detail fetched: {detail}")  # ✅ Отладка
+        if not detail:
+            raise HTTPException(status_code=404, detail="Product not found")
+        # ✅ Если detail — Pydantic-модель, можно оставить как есть
         export_data = [
             {"SKU": detail.sku, "Name": detail.name, "Revenue": detail.revenue, "Sold": detail.quantity_sold, "Stock": detail.stock}
         ]
@@ -106,6 +120,7 @@ def export_report(
     else:
         raise HTTPException(status_code=400, detail="Invalid export scope")
 
+    # --- Генерация файла ---
     df = pd.DataFrame(export_data)
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
