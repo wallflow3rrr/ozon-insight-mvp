@@ -4,15 +4,15 @@ import { PERIODS, LOGISTICS_TYPES } from '../../utils/constants';
 import { api } from '../../services/api';
 import Button from '../UI/Button';
 
-const DashboardHeader = ({ onSync, dashboardData }) => {
+const DashboardHeader = ({ onSync }) => {
   const { period, setPeriod, logistics, setLogistics } = useAppContext();
   const [syncStatus, setSyncStatus] = useState(null);
 
   const handleSync = async () => {
     setSyncStatus('loading');
     try {
-      const data = await api.getDashboardData(period, logistics);
-      onSync(data);
+      // ✅ Вызываем onSync, который передаётся из родительского компонента (Dashboard)
+      await onSync();
       setSyncStatus('success');
     } catch (error) {
       setSyncStatus('error');

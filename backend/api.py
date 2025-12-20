@@ -22,10 +22,10 @@ def get_last_sync_status(user_id: str = Depends(mock_auth)):
     status_info = db.get_sync_status(user_id)
     return SyncStatus(**status_info)
 
-@router.post("/api/sync/trigger", status_code=200)
-def trigger_data_sync(request: SyncTriggerRequest, user_id: str = Depends(mock_auth)):
-    session_id = db.trigger_sync(user_id)
-    return {"message": "Sync started", "session_id": session_id}
+@router.post("/api/sync/trigger", response_model=SyncStatus)
+def trigger_sync(user_id: str = Depends(mock_auth)):
+    db.generate_mock_data(user_id)
+    return SyncStatus(message="Sync started", session_id="mock_session_123")
 
 @router.get("/api/dashboard", response_model=DashboardResponse)
 def get_dashboard_data(

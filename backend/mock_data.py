@@ -1,105 +1,131 @@
 import random
 from datetime import datetime, timedelta
-from faker import Faker
-from models import KpiData, ChartDataPoint, Product, ProductDetailResponse
+from models import (
+    # DashboardData,  # ❌ Убрано
+    ProductSummary, DailyMetric, ProductDetail, DashboardResponse, ProductDetailResponse
+)
 
-fake = Faker()
+# Временная "база данных" в памяти
+mock_db = {}
 
-def generate_date_range(days):
-    dates = []
-    for i in range(days - 1, -1, -1):
-        date = datetime.now() - timedelta(days=i)
-        dates.append(date.strftime('%Y-%m-%d'))
-    return dates
-
-def generate_kpi_data(period: int) -> KpiData:
-    revenue = random.randint(50000, 500000)
-    orders = random.randint(50, 500)
-    return KpiData(
-        revenue=revenue,
-        orders=orders,
-        avg_check=round(revenue / orders, 2),
-        return_rate=random.randint(0, 15)
-    )
-
-def generate_revenue_chart(period: int) -> list[ChartDataPoint]:
-    dates = generate_date_range(period)
-    return [ChartDataPoint(date=date, value=random.randint(1000, 10000)) for date in dates]
-
-def generate_top_products(limit: int = 5) -> list[Product]:
-    products = []
-    for _ in range(limit):
-        products.append(Product(
-            sku=f"SKU{fake.uuid4()[:6]}",
-            name=fake.catch_phrase(),
-            revenue=random.randint(5000, 50000),
-            stock=random.randint(0, 50),
-            logistics=random.choice(['FBO', 'FBS'])
-        ))
-    return products
-
-def generate_product_detail(sku: str) -> ProductDetailResponse:
-    dates = generate_date_range(30)
-    sales_chart = [ChartDataPoint(date=date, value=random.randint(0, 10)) for date in dates]
-    quantity_sold = sum([c.value for c in sales_chart])
-    return ProductDetailResponse(
-        sku=sku,
-        name=fake.catch_phrase(),
-        revenue=random.randint(10000, 100000),
-        quantity_sold=quantity_sold,
-        returns=random.randint(0, 5),
-        stock=random.randint(0, 50),
-        sales_chart=sales_chart
-    )
-
-# --- Хранилище данных (в памяти) ---
 class MockDB:
-    def __init__(self):
-        self.users = {}
-        self.sync_sessions = {}
-        self.last_syncs = {}
-        self.dashboard_data = {}
-        self.product_data = {}
-
     def get_or_create_user(self, user_id: str):
-        if user_id not in self.users:
-            self.users[user_id] = {"id": user_id, "connected": True}
-        return self.users[user_id]
+        """Создаёт запись для пользователя в 'базе', если её нет."""
+        if user_id not in mock_db:
+            mock_db[user_id] = {
+                "daily_metrics": [],
+                "products": {}
+            }
 
-    def trigger_sync(self, user_id: str):
-        session_id = f"sess_{fake.uuid4()[:8]}"
-        self.sync_sessions[session_id] = {
-            "user_id": user_id,
-            "started_at": datetime.now(),
-            "status": "success"
-        }
-        period = 30
-        self.dashboard_data[user_id] = {
-            "kpi": generate_kpi_data(period),
-            "revenue_chart": generate_revenue_chart(period),
-            "top_products": generate_top_products(5)
-        }
-        for i in range(20):
-            sku = f"SKU{fake.uuid4()[:6]}"
-            self.product_data[(user_id, sku)] = generate_product_detail(sku)
-        self.last_syncs[user_id] = {
-            "last_sync": datetime.now(),
-            "status": "success",
-            "message": "Mock sync completed"
-        }
-        return session_id
+    def generate_mock_data(self, user_id: str):
+        """Генерирует и сохраняет заглушённые данные для пользователя."""
+        # Убедимся, что пользователь существует
+        self.get_or_create_user(user_id)
+
+        now = datetime.now()
+        start_date = now - timedelta(days=90)
+        daily_metrics = []
+        products = {}
+
+        for i in range(90):
+            date = start_date + timedelta(days=i)
+            revenue = random.randint(10000, 50000)
+            orders = random.randint(5, 50)
+            avg_check = revenue / orders if orders > 0 else 0
+            returns = random.randint(0, 5)
+            daily_metrics.append(DailyMetric(
+                date=date.strftime("%Y-%m-%d"),
+                revenue=revenue,
+                orders=orders,
+                avg_check=avg_check,
+                returns=returns
+            ))
+
+            for j in range(3):
+                sku = f"SKU{j+1}"
+                if sku not in products:
+                    products[sku] = {
+                        "name": f"Товар {j+1}",
+                        "revenue": 0,
+                        "quantity_sold": 0,
+                        "stock": random.randint(0, 100),
+                        "logistics": random.choice(["FBO", "FBS"]),
+                        "sales_chart": []
+                    }
+                products[sku]["revenue"] += revenue // 3
+                products[sku]["quantity_sold"] += orders // 3
+
+        mock_db[user_id]["daily_metrics"] = daily_metrics
+        mock_db[user_id]["products"] = products
 
     def get_dashboard_data(self, user_id: str, period: int, logistics: str):
-        data = self.dashboard_data.get(user_id)
-        if not data:
+        """Возвращает сгенерированные данные за указанный период."""
+        user_data = mock_db.get(user_id)
+        if not user_data:
             return None
-        return data
+
+        start_date = datetime.now() - timedelta(days=period)
+        filtered_metrics = [
+            m for m in user_data["daily_metrics"]
+            if datetime.strptime(m.date, "%Y-%m-%d") >= start_date
+        ]
+
+        total_revenue = sum(m.revenue for m in filtered_metrics)
+        total_orders = sum(m.orders for m in filtered_metrics)
+        avg_check = total_revenue / total_orders if total_orders > 0 else 0
+        total_returns = sum(m.returns for m in filtered_metrics)
+        return_rate = (total_returns / total_orders * 100) if total_orders > 0 else 0
+
+        top_products = sorted(
+            user_data["products"].values(),
+            key=lambda x: x["revenue"],
+            reverse=True
+        )[:5]
+
+        top_products_converted = [
+            ProductSummary(
+                sku=p["name"].replace(" ", ""),
+                name=p["name"],
+                revenue=p["revenue"],
+                stock=p["stock"],
+                logistics=p["logistics"]
+            )
+            for p in top_products
+        ]
+
+        return {
+            "kpi": {
+                "revenue": total_revenue,
+                "orders": total_orders,
+                "avg_check": round(avg_check, 2),
+                "return_rate": round(return_rate, 2)
+            },
+            "revenue_chart": [{"date": m.date, "value": m.revenue} for m in filtered_metrics[-30:]],
+            "top_products": top_products_converted
+        }
 
     def get_product_detail(self, user_id: str, sku: str):
-        key = (user_id, sku)
-        return self.product_data.get(key)
+        """Возвращает детализацию по товару."""
+        user_data = mock_db.get(user_id)
+        if not user_data:
+            return None
 
-    def get_sync_status(self, user_id: str):
-        return self.last_syncs.get(user_id, {"last_sync": None, "status": "never", "message": "No sync yet"})
+        product = user_data["products"].get(sku)
+        if not product:
+            return None
+
+        sales_chart = [
+            {"date": m.date, "value": random.randint(1, 10)}
+            for m in user_data["daily_metrics"][-30:]
+        ]
+
+        return ProductDetail(
+            sku=sku,
+            name=product["name"],
+            revenue=product["revenue"],
+            quantity_sold=product["quantity_sold"],
+            stock=product["stock"],
+            sales_chart=sales_chart
+        )
 
 db = MockDB()
