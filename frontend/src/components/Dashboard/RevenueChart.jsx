@@ -1,26 +1,26 @@
 import React from 'react';
 import { Line } from 'react-chartjs-2';
 import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
+Chart as ChartJS,
+CategoryScale,
+LinearScale,
+PointElement,
+LineElement,
+Title,
+Tooltip,
+Legend,
 } from 'chart.js';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
 
-const RevenueChart = ({ data }) => {
+const RevenueChart = ({ data, title = 'Динамика выручки' }) => {
   if (!data || !data.revenue_chart) return <div className="text-center text-gray-500 dark:text-gray-400">Нет данных</div>;
 
   const chartData = {
     labels: data.revenue_chart.map(d => d.date),
     datasets: [
       {
-        label: 'Выручка',
+        label: title,
         data: data.revenue_chart.map(d => d.value),
         fill: false,
         borderColor: 'rgb(59, 130, 246)',
@@ -34,7 +34,12 @@ const RevenueChart = ({ data }) => {
     responsive: true,
     plugins: {
       legend: { display: false },
-      title: { display: true, text: 'Динамика выручки', color: '#6b7280', font: { size: 16 } },
+      title: { 
+        display: true, 
+        text: title,  // ✅ Динамический заголовок
+        color: '#6b7280', 
+        font: { size: 16 } 
+      },
     },
     scales: {
       y: {

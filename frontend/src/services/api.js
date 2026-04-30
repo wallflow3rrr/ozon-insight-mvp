@@ -53,6 +53,12 @@ export const api = {
     return `${API_BASE_URL}/api/export?${params}`;
   },
 
+  getReturnsData: (period, logistics) =>
+    fetch(`${API_BASE_URL}/api/returns?period=${period}&logistics=${logistics}`).then(res => {
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+      return res.json();
+    }),
+
   // Подсказки
   getMetricTooltip: (metricKey) => 
     fetch(`${API_BASE_URL}/api/metric-tooltip?metric_key=${metricKey}`).then(res => res.json()),
