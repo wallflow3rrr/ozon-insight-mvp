@@ -16,8 +16,7 @@ import uuid
 router = APIRouter()
 
 def get_user_id():
-    return "mock_user_123"
-
+    return "00000000-0000-0000-0000-000000000001"
 @router.get("/api/sync/status", response_model=SyncStatus)
 def get_sync_status(db: Session = Depends(get_db)):
     last = db.query(SyncHistory).order_by(SyncHistory.start_time.desc()).first()

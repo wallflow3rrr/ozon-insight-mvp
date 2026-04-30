@@ -41,7 +41,7 @@ const StockDashboard = () => {
         <h1 className="text-2xl font-bold">Дашборд остатков</h1>
         <ExportButton data={stockData} scope="stock" period={period} logistics={logistics} />
       </div>
-      <DashboardHeader onSync={handleSync} />
+      <DashboardHeader onSync={handleSync} showPeriodFilter={false} />
       
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <Card><h3 className="text-gray-500 dark:text-gray-400 text-sm">Всего товаров</h3><p className="text-2xl font-bold">{stockData.total_products}</p></Card>

@@ -3,9 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from api import router
 from database import engine
 from models_db import Base
-from seed import run_full_seed
 
-app = FastAPI(title="OzonInsight API", version="1.0.0")
+app = FastAPI(title="OzonInsight API (PostgreSQL)", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,11 +16,10 @@ app.add_middleware(
 
 app.include_router(router)
 
-@app.on_event("startup")
-def startup():
-    Base.metadata.create_all(bind=engine)
-    run_full_seed()
+# Примечание: Поскольку мы используем Alembic, вызывать Base.metadata.create_all() 
+# в main.py больше НЕ нужно. Таблицы управляются миграциями.
+# Данные мы заполним отдельной командой.
 
 @app.get("/")
 def root():
-    return {"status": "OzonInsight API is running"}
+    return {"status": "OzonInsight API is running on PostgreSQL!"}
