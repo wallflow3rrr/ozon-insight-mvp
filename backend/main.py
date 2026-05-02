@@ -1,10 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api import router
+from api import router as api_router
+from auth import router as auth_router  # ✅ Добавлено
 from database import engine
 from models_db import Base
 
-app = FastAPI(title="OzonInsight API (PostgreSQL)", version="1.0.0")
+app = FastAPI(title="OzonInsight API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,8 +15,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(router)
 
+app.include_router(auth_router)
+app.include_router(api_router)
 # Примечание: Поскольку мы используем Alembic, вызывать Base.metadata.create_all() 
 # в main.py больше НЕ нужно. Таблицы управляются миграциями.
 # Данные мы заполним отдельной командой.

@@ -1,20 +1,15 @@
 import csv
 import os
 import random
-import uuid
 from datetime import datetime, timedelta, date
 from decimal import Decimal
 
-from database import SessionLocal, engine
-from models_db import (
-    Base, User, Tokens, Products, Orders, Returns, MetricsSummary, SyncHistory
-)
+from database import SessionLocal
+from models_db import Products, Orders, Returns
 
-# Путь для сохранения CSV
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# Реалистичные товары (с вашего скриншота)
 PRODUCTS_SEED = [
     {"sku": "184920374", "name": "Ароматизатор в машину + полотенце", "price": 606, "logistics": "FBO"},
     {"sku": "193847562", "name": "Килт-полотенце для женщин", "price": 753, "logistics": "FBS"},
@@ -25,13 +20,15 @@ PRODUCTS_SEED = [
     {"sku": "198273645", "name": "Набор полотенец вафельные 12 шт", "price": 1013, "logistics": "FBO"},
 ]
 
-RETURN_REASONS = ["Не подошёл размер", "Брак", "Не понравилось качество", "Отказ покупателя", "Повреждена упаковка"]
-
-# ✅ ВАЖНО: Используем валидный UUID для тестового пользователя
-USER_ID = "00000000-0000-0000-0000-000000000001"
+# ✅ Реальные причины возвратов как в Ozon (исправлена буква 'ё')
+RETURN_REASONS = [
+    "Привезли не тот товар",
+    "Товар не подошёл", 
+    "Проблемы с товаром или упаковкой"
+]
 
 def generate_csv_files(days: int = 90):
-    """Генерирует CSV файлы"""
+    """Генерирует CSV файлы с ценами без копеек"""
     orders_path = os.path.join(DATA_DIR, "orders.csv")
     returns_path = os.path.join(DATA_DIR, "returns.csv")
     stocks_path = os.path.join(DATA_DIR, "stocks.csv")
@@ -59,29 +56,39 @@ def generate_csv_files(days: int = 90):
                 prod = random.choice(PRODUCTS_SEED)
                 qty = random.randint(1, 3)
                 price = prod["price"]
-                revenue = Decimal(str(qty * price))
+                # ✅ Цены и суммы как целые числа (без копеек)
+                revenue = int(qty * price)
                 status = random.choices(["delivered", "cancelled", "awaiting_packaging"], weights=[0.85, 0.10, 0.05])[0]
                 order_id = f"ORD-{current_date.strftime('%y%m%d')}-{random.randint(10000, 99999)}"
                 
                 w_ord.writerow([
-                    order_id, current_date.strftime("%d.%m.%Y"), prod["sku"], prod["name"],
-                    qty, f"{price:.2f}", f"{revenue:.2f}", status, prod["logistics"]
+                    order_id, 
+                    current_date.strftime("%d.%m.%Y"), 
+                    prod["sku"], 
+                    prod["name"],
+                    qty, 
+                    str(int(price)),      # ✅ Было: f"{price:.2f}"
+                    str(revenue),         # ✅ Было: f"{revenue:.2f}"
+                    status, 
+                    prod["logistics"]
                 ])
                 
                 if random.random() < 0.12 and status == "delivered":
                     ret_qty = random.randint(1, qty)
-                    ret_amount = Decimal(str(ret_qty * price * 0.9))
+                    # ✅ Сумма возврата тоже целая
+                    ret_amount = int(ret_qty * price * 0.9)
                     w_ret.writerow([
-                        order_id, prod["sku"], ret_qty, f"{ret_amount:.2f}",
-                        random.choice(RETURN_REASONS), current_date.strftime("%d.%m.%Y")
+                        order_id, 
+                        prod["sku"], 
+                        ret_qty, 
+                        str(ret_amount),  # ✅ Было: f"{ret_amount:.2f}"
+                        random.choice(RETURN_REASONS), 
+                        current_date.strftime("%d.%m.%Y")
                     ])
         
         for i, prod in enumerate(PRODUCTS_SEED):
-            # Первые 2 товара - низкий остаток
             if i < 2: stock = random.randint(0, 8)
-            # Третий - нет в наличии
             elif i == 2: stock = 0
-            # Остальные - нормальный
             else: stock = random.randint(50, 200)
             
             reserved = random.randint(0, max(0, stock // 4))
@@ -90,23 +97,21 @@ def generate_csv_files(days: int = 90):
 def seed_database():
     """Загружает данные из CSV в PostgreSQL"""
     db = SessionLocal()
+    
+    # ✅ Получаем ID существующего админа из БД
+    from models_db import User
+    admin_user = db.query(User).filter(User.ozon_seller_id == "admin_internal_user").first()
+    
+    if not admin_user:
+        print("❌ Пользователь admin не найден в БД! Сначала запустите: python create_admin.py")
+        db.close()
+        return
+    
+    user_id = admin_user.id
+    print(f"✅ Используем пользователя: {user_id}")
+    
     try:
-        # 1. Создаем пользователя, если нет
-        user = db.query(User).filter(User.id == USER_ID).first()
-        if not user:
-            user = User(id=USER_ID, ozon_seller_id="OZON_SELLER_999")
-            db.add(user)
-            db.flush()
-            
-            token = Tokens(
-                user_id=USER_ID,
-                access_token="ozon_live_abc123...",
-                refresh_token="ozon_refresh_xyz...",
-                expires_at=datetime.utcnow() + timedelta(days=30)
-            )
-            db.add(token)
-
-        # 2. Загружаем товары из stocks.csv
+        # Загружаем товары
         stocks_path = os.path.join(DATA_DIR, "stocks.csv")
         if os.path.exists(stocks_path):
             with open(stocks_path, "r", encoding="utf-8") as f:
@@ -115,7 +120,8 @@ def seed_database():
                     prod = db.query(Products).filter(Products.sku == row["sku"]).first()
                     if not prod:
                         prod = Products(
-                            user_id=USER_ID, sku=row["sku"], name=row["name"],
+                            user_id=user_id,
+                            sku=row["sku"], name=row["name"],
                             logistics_type=row["logistics_type"], stock=int(row["stock"])
                         )
                         db.add(prod)
@@ -123,20 +129,20 @@ def seed_database():
                         prod.stock = int(row["stock"])
             db.flush()
 
-        # 3. Загружаем заказы
+        # Загружаем заказы
         orders_path = os.path.join(DATA_DIR, "orders.csv")
         if os.path.exists(orders_path):
             with open(orders_path, "r", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 count = 0
                 for row in reader:
-                    # Проверяем дубликаты
                     if db.query(Orders).filter(Orders.order_id == row["order_id"]).first():
                         continue
                     
                     order_date = datetime.strptime(row["date"], "%d.%m.%Y").date()
                     db.add(Orders(
-                        user_id=USER_ID, order_id=row["order_id"], sku=row["sku"],
+                        user_id=user_id,
+                        order_id=row["order_id"], sku=row["sku"],
                         quantity=int(row["quantity"]), revenue=Decimal(row["revenue"]),
                         status=row["status"], date=order_date,
                         logistics_type=row["logistics_type"]
@@ -144,7 +150,7 @@ def seed_database():
                     count += 1
                 print(f"✅ Загружено заказов: {count}")
 
-        # 4. Загружаем возвраты
+        # Загружаем возвраты
         returns_path = os.path.join(DATA_DIR, "returns.csv")
         if os.path.exists(returns_path):
             with open(returns_path, "r", encoding="utf-8") as f:
@@ -153,7 +159,8 @@ def seed_database():
                 for row in reader:
                     ret_date = datetime.strptime(row["date"], "%d.%m.%Y").date()
                     db.add(Returns(
-                        user_id=USER_ID, order_id=row["order_id"], sku=row["sku"],
+                        user_id=user_id,
+                        order_id=row["order_id"], sku=row["sku"],
                         quantity=int(row["quantity"]), amount=Decimal(row["amount"]),
                         reason=row["reason"], date=ret_date
                     ))

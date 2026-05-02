@@ -12,6 +12,8 @@ from schemas import (
     ProductDetailResponse, SyncStatus, TooltipResponse, KpiData, ProductSummary
 )
 import uuid
+from uuid import UUID 
+from auth import get_current_user
 
 router = APIRouter()
 
@@ -25,77 +27,136 @@ def get_sync_status(db: Session = Depends(get_db)):
         session_id=last.id if last else "none"
     )
 
-@router.post("/api/sync/trigger", response_model=SyncStatus)
-def trigger_sync(db: Session = Depends(get_db)):
-    session_id = str(uuid.uuid4())
-    db.add(SyncHistory(user_id=get_user_id(), start_time=date.today(), status="in_progress"))
+@router.post("/api/sync/trigger")
+def trigger_sync(
+    user_id: str = Depends(get_current_user),  # ✅ Получаем ID из токена
+    db: Session = Depends(get_db)
+):
+    from uuid import UUID
+    from datetime import datetime
+    
+    user_uuid = UUID(user_id)  # ✅ Конвертация для PostgreSQL
+    
+    # Записываем начало синхронизации в историю
+    sync_record = SyncHistory(
+        user_id=user_uuid,  # ✅ Используем реальный UUID из токена
+        start_time=datetime.utcnow(),
+        status="in_progress",
+        error_message=None
+    )
+    db.add(sync_record)
     db.commit()
-    return SyncStatus(message="Синхронизация запущена", session_id=session_id)
+    
+    try:
+        # 🔄 Здесь была бы логика реального запроса к Ozon API
+        # Для MVP: имитируем успешную синхронизацию
+        import time
+        time.sleep(1)  # Имитация задержки
+        
+        # Обновляем запись об успешном завершении
+        sync_record.end_time = datetime.utcnow()
+        sync_record.status = "completed"
+        db.commit()
+        
+        return {"status": "success", "message": "Синхронизация завершена"}
+        
+    except Exception as e:
+        # При ошибке обновляем запись с информацией об ошибке
+        sync_record.end_time = datetime.utcnow()
+        sync_record.status = "failed"
+        sync_record.error_message = str(e)
+        db.commit()
+        
+        raise HTTPException(status_code=500, detail=f"Ошибка синхронизации: {str(e)}")
 
 @router.get("/api/dashboard", response_model=DashboardResponse)
 def get_dashboard(
     period: int = Query(30, ge=1, le=365),
     logistics: str = Query("both"),
+    user_id: str = Depends(get_current_user),  # Приходит как строка
     db: Session = Depends(get_db)
 ):
+    # ✅ Явно конвертируем строку из токена в UUID для PostgreSQL
+    user_uuid = UUID(user_id)
+    
+    from datetime import date, timedelta
+    from collections import defaultdict
+    from sqlalchemy import func
+    
     start_date = date.today() - timedelta(days=period)
-    query = db.query(MetricsSummary).filter(
-        MetricsSummary.user_id == get_user_id(),
-        MetricsSummary.date >= start_date,
-        MetricsSummary.logistics_type == logistics
+    
+    # 🔍 Отладка: смотрим, сколько всего заказов у этого юзера в БД
+    total_in_db = db.query(Orders).filter(Orders.user_id == user_uuid).count()
+    print(f"🔍 DEBUG: Всего заказов в БД для user {user_uuid}: {total_in_db}")
+    
+    # 1. Загружаем заказы (убрали фильтр status, чтобы точно получить данные)
+    orders_query = db.query(Orders).filter(
+        Orders.user_id == user_uuid,
+        Orders.date >= start_date
     )
+    if logistics != "both":
+        orders_query = orders_query.filter(Orders.logistics_type == logistics)
+    orders = orders_query.all()
     
-    metrics = query.all()
-    if not metrics:
-        raise HTTPException(status_code=404, detail="Нет данных за выбранный период")
-        
-    total_rev = sum(m.revenue for m in metrics)
-    total_ord = sum(m.orders_count for m in metrics)
-    total_ret = sum(m.returns_count for m in metrics)
+    print(f"🔍 DEBUG: Найдено заказов за период: {len(orders)}")
+
+    # Если данных нет — возвращаем 404
+    if not orders:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Нет данных за период {period} дней. Проверьте seed.py и user_id."
+        )
     
-    avg_check = round(total_rev / total_ord, 2) if total_ord > 0 else 0.0
-    ret_rate = round((total_ret / total_ord * 100), 2) if total_ord > 0 else 0.0
+    # 2. Считаем метрики
+    total_revenue = sum(o.revenue for o in orders)
+    total_orders = len(orders)
     
-    chart_data = [{"date": m.date.isoformat(), "value": float(m.revenue)} for m in metrics]
+    # Возвраты
+    order_ids = [o.order_id for o in orders]
+    returns = db.query(Returns).filter(
+        Returns.user_id == user_uuid,
+        Returns.order_id.in_(order_ids)
+    ).all()
+    total_returns = sum(r.quantity for r in returns)
     
-    products = db.query(
-        Orders.sku, func.sum(Orders.revenue).label("revenue")
-    ).filter(
-        Orders.user_id == get_user_id(),
-        Orders.date >= start_date,
-        (Orders.logistics_type == logistics if logistics != "both" else True)
-    ).group_by(Orders.sku).order_by(func.sum(Orders.revenue).desc()).limit(5).all()
+    avg_check = round(float(total_revenue / total_orders), 2) if total_orders > 0 else 0.0
+    return_rate = round((total_returns / total_orders * 100), 2) if total_orders > 0 else 0.0
     
-    top_list = []
-    for sku, rev in products:
-        prod = db.query(Products).filter(Products.sku == sku).first()
+    # 3. График по дням
+    daily_revenue = defaultdict(float)
+    for o in orders:
+        daily_revenue[o.date] += float(o.revenue)
+    revenue_chart = [{"date": d.isoformat(), "value": v} for d, v in sorted(daily_revenue.items())]
+    
+    # 4. ТОП-5 товаров
+    top_query = db.query(Orders.sku, func.sum(Orders.revenue).label("rev")).filter(
+        Orders.user_id == user_uuid, Orders.date >= start_date
+    ).group_by(Orders.sku).order_by(func.sum(Orders.revenue).desc()).limit(5)
+    
+    top_products = []
+    for sku, rev in top_query.all():
+        prod = db.query(Products).filter(Products.sku == sku, Products.user_id == user_uuid).first()
         if prod:
-            top_list.append(ProductSummary(
-                sku=prod.sku, 
-                name=prod.name, 
-                revenue=float(rev), 
-                stock=prod.stock, 
-                logistics=prod.logistics_type
-            ))
+            top_products.append({"sku": prod.sku, "name": prod.name, "revenue": float(rev), "stock": prod.stock, "logistics": prod.logistics_type})
             
-    return DashboardResponse(
-        kpi=KpiData(
-            revenue=float(total_rev), 
-            orders=total_ord, 
-            avg_check=avg_check, 
-            return_rate=ret_rate
-        ),
-        revenue_chart=chart_data,
-        top_products=top_list
-    )
+    return {
+        "kpi": {"revenue": float(total_revenue), "orders": total_orders, "avg_check": avg_check, "return_rate": return_rate},
+        "revenue_chart": revenue_chart,
+        "top_products": top_products
+    }
 
 @router.get("/api/stock", response_model=StockResponse)
 def get_stock(
-    period: int = Query(30),
+    period: int = Query(30),  # period не используется для остатков, но оставляем для совместимости
     logistics: str = Query("both"),
+    user_id: str = Depends(get_current_user),  # ✅ Получаем ID из токена
     db: Session = Depends(get_db)
 ):
-    prods = db.query(Products).filter(Products.user_id == get_user_id())
+    from uuid import UUID
+    user_uuid = UUID(user_id)  # ✅ Конвертируем строку в UUID для PostgreSQL
+    
+    # Запрос к таблице Products
+    prods = db.query(Products).filter(Products.user_id == user_uuid)
     if logistics != "both":
         prods = prods.filter(Products.logistics_type == logistics)
     prods = prods.all()
@@ -103,7 +164,7 @@ def get_stock(
     # ✅ Порог низкого остатка: < 10 штук
     LOW_STOCK_THRESHOLD = 10
     
-    total_val = sum(p.stock * 500 for p in prods)
+    total_val = sum(p.stock * 500 for p in prods)  # 500 — средняя цена для оценки
     low = [p for p in prods if p.stock < LOW_STOCK_THRESHOLD]
     out = [p for p in prods if p.stock == 0]
     
@@ -126,10 +187,14 @@ def get_stock(
 def get_logistics(
     period: int = Query(30),
     logistics: str = Query("both"),
+    user_id: str = Depends(get_current_user),  # ✅ Получаем ID из токена
     db: Session = Depends(get_db)
 ):
+    from uuid import UUID
+    user_uuid = UUID(user_id)  # ✅ Конвертируем строку в UUID
+    
     start = date.today() - timedelta(days=period)
-    orders = db.query(Orders).filter(Orders.user_id == get_user_id(), Orders.date >= start)
+    orders = db.query(Orders).filter(Orders.user_id == user_uuid, Orders.date >= start)
     if logistics != "both":
         orders = orders.filter(Orders.logistics_type == logistics)
         
@@ -164,13 +229,31 @@ def get_logistics(
     )
 
 @router.get("/api/product/{sku}", response_model=ProductDetailResponse)
-def get_product(sku: str, period: int = Query(30), db: Session = Depends(get_db)):
-    prod = db.query(Products).filter(Products.sku == sku, Products.user_id == get_user_id()).first()
+def get_product(
+    sku: str,
+    period: int = Query(30),
+    user_id: str = Depends(get_current_user),  # ✅ Получаем ID из токена
+    db: Session = Depends(get_db)
+):
+    from uuid import UUID
+    user_uuid = UUID(user_id)  # ✅ Конвертация для PostgreSQL
+    
+    start = date.today() - timedelta(days=period)
+    
+    # Ищем товар с учётом владельца
+    prod = db.query(Products).filter(
+        Products.sku == sku, 
+        Products.user_id == user_uuid
+    ).first()
+    
     if not prod:
         raise HTTPException(status_code=404, detail="Товар не найден")
         
-    start = date.today() - timedelta(days=period)
-    orders = db.query(Orders).filter(Orders.sku == sku, Orders.user_id == get_user_id(), Orders.date >= start).all()
+    orders = db.query(Orders).filter(
+        Orders.sku == sku, 
+        Orders.user_id == user_uuid, 
+        Orders.date >= start
+    ).all()
     
     revenue = sum(o.revenue for o in orders)
     qty = sum(o.quantity for o in orders)
@@ -182,49 +265,81 @@ def get_product(sku: str, period: int = Query(30), db: Session = Depends(get_db)
         chart.append({"date": d.isoformat(), "value": float(day_rev)})
         
     return ProductDetailResponse(
-        sku=prod.sku, name=prod.name, revenue=float(revenue),
-        quantity_sold=qty, stock=prod.stock, sales_chart=chart
+        sku=prod.sku, 
+        name=prod.name, 
+        revenue=float(revenue),
+        quantity_sold=qty, 
+        stock=prod.stock, 
+        sales_chart=chart
     )
 
 @router.get("/api/export")
 def export_report(
-    scope: str, format: str, period: int, logistics: str, sku: str = None, db: Session = Depends(get_db)
+    scope: str = Query(...),
+    format: str = Query("xlsx"),
+    period: int = Query(30),
+    logistics: str = Query("both"),
+    sku: str = Query(None),
+    user_id: str = Depends(get_current_user),  # ✅ Защита токеном
+    db: Session = Depends(get_db)
 ):
+    from uuid import UUID
+    user_uuid = UUID(user_id)  # ✅ Конвертация для PostgreSQL
+    
+    import pandas as pd
+    import io
+    from fastapi.responses import StreamingResponse
+    from fastapi import HTTPException
+    
     start = date.today() - timedelta(days=period)
     data = []
     filename = "report.xlsx"
     
     if scope == "dashboard":
-        metrics = db.query(MetricsSummary).filter(
-            MetricsSummary.user_id == get_user_id(),
-            MetricsSummary.date >= start,
-            MetricsSummary.logistics_type == logistics
-        ).order_by(MetricsSummary.date.asc()).all()
-        
-        if not metrics:
+        # ✅ Запрашиваем заказы напрямую (так как metrics_summary пуст)
+        orders_q = db.query(Orders).filter(
+            Orders.user_id == user_uuid,
+            Orders.date >= start
+        )
+        if logistics != "both":
+            orders_q = orders_q.filter(Orders.logistics_type == logistics)
+        orders = orders_q.order_by(Orders.date.asc()).all()
+
+        if not orders:
             raise HTTPException(status_code=404, detail="Нет данных для экспорта")
-            
-        total_rev = sum(m.revenue for m in metrics)
-        total_ord = sum(m.orders_count for m in metrics)
-        avg_check = round(total_rev / total_ord, 2) if total_ord > 0 else 0.0
-        ret_rate = round((sum(m.returns_count for m in metrics) / total_ord * 100), 2) if total_ord > 0 else 0.0
-        
-        # Сводная строка
-        data.append({"Дата": "ИТОГО", "Выручка": round(float(total_rev), 2), "Заказы": total_ord, "Ср. чек": avg_check, "Доля возвратов (%)": ret_rate})
-        # Ежедневные строки
-        data.extend([
-            {
-                "Дата": m.date.strftime("%d.%m.%Y"),
-                "Выручка": round(float(m.revenue), 2),
-                "Заказы": m.orders_count,
-                "Ср. чек": round(float(m.avg_check), 2),
-                "Доля возвратов (%)": round(float(m.return_rate), 2)
-            } for m in metrics
-        ])
+
+        # Агрегация по дням
+        from collections import defaultdict
+        daily = defaultdict(lambda: {"revenue": 0.0, "count": 0})
+        for o in orders:
+            daily[o.date]["revenue"] += float(o.revenue)
+            daily[o.date]["count"] += 1
+
+        data = []
+        total_rev, total_cnt = 0.0, 0
+        for d, vals in sorted(daily.items()):
+            avg = vals["revenue"] / vals["count"] if vals["count"] > 0 else 0
+            data.append({
+                "Дата": d.strftime("%d.%m.%Y"),
+                "Выручка": round(vals["revenue"], 2),
+                "Заказы": vals["count"],
+                "Ср. чек": round(avg, 2)
+            })
+            total_rev += vals["revenue"]
+            total_cnt += vals["count"]
+
+        # Итоговая строка
+        avg_total = total_rev / total_cnt if total_cnt > 0 else 0
+        data.insert(0, {
+            "Дата": "ИТОГО",
+            "Выручка": round(total_rev, 2),
+            "Заказы": total_cnt,
+            "Ср. чек": round(avg_total, 2)
+        })
         filename = f"dashboard_{period}_{logistics}.xlsx"
 
     elif scope == "stock":
-        prods = db.query(Products).filter(Products.user_id == get_user_id())
+        prods = db.query(Products).filter(Products.user_id == user_uuid)  # ✅
         if logistics != "both": 
             prods = prods.filter(Products.logistics_type == logistics)
         prods = prods.all()
@@ -236,7 +351,7 @@ def export_report(
         filename = f"stock_{period}_{logistics}.xlsx"
 
     elif scope == "logistics":
-        orders = db.query(Orders).filter(Orders.user_id == get_user_id(), Orders.date >= start)
+        orders = db.query(Orders).filter(Orders.user_id == user_uuid, Orders.date >= start)  # ✅
         if logistics != "both": 
             orders = orders.filter(Orders.logistics_type == logistics)
         orders = orders.all()
@@ -254,7 +369,7 @@ def export_report(
         filename = f"logistics_{period}_{logistics}.xlsx"
 
     elif scope == "returns":
-        returns = db.query(Returns).filter(Returns.user_id == get_user_id(), Returns.date >= start).all()
+        returns = db.query(Returns).filter(Returns.user_id == user_uuid, Returns.date >= start).all()  # ✅
         if not returns:
             raise HTTPException(status_code=404, detail="Нет данных для экспорта")
         data = [
@@ -270,20 +385,18 @@ def export_report(
         filename = f"returns_{period}_{logistics}.xlsx"
 
     elif scope == "product" and sku:
-        orders = db.query(Orders).filter(Orders.sku == sku, Orders.user_id == get_user_id(), Orders.date >= start)
+        orders = db.query(Orders).filter(Orders.sku == sku, Orders.user_id == user_uuid, Orders.date >= start)  # ✅
         if logistics != "both": 
             orders = orders.filter(Orders.logistics_type == logistics)
         orders = orders.all()
         if not orders:
             raise HTTPException(status_code=404, detail="Нет данных для экспорта")
             
-        prod = db.query(Products).filter(Products.sku == sku, Products.user_id == get_user_id()).first()
+        prod = db.query(Products).filter(Products.sku == sku, Products.user_id == user_uuid).first()  # ✅
         total_rev = sum(o.revenue for o in orders)
         total_qty = sum(o.quantity for o in orders)
         
-        # Сводная по товару
         data.append({"SKU": sku, "Название": prod.name if prod else sku, "Всего продано": total_qty, "Выручка": round(float(total_rev), 2)})
-        # Детализация по заказам
         data.extend([
             {
                 "Дата": o.date.strftime("%d.%m.%Y"),
@@ -313,19 +426,23 @@ def export_report(
 def get_returns(
     period: int = Query(30),
     logistics: str = Query("both"),
+    user_id: str = Depends(get_current_user),  # ✅ Получаем ID из токена
     db: Session = Depends(get_db)
 ):
+    from uuid import UUID
+    user_uuid = UUID(user_id)  # ✅ Конвертируем строку в UUID для PostgreSQL
+
     start = date.today() - timedelta(days=period)
     
-    # 1. Загружаем ВСЕ возвраты за период в память
+    # 1. Загружаем ВСЕ возвраты за период
     returns = db.query(Returns).filter(
-        Returns.user_id == get_user_id(),
+        Returns.user_id == user_uuid,  # ✅ Используем UUID
         Returns.date >= start
     ).all()
     
     # 2. Загружаем заказы для расчёта доли возвратов
     orders = db.query(Orders).filter(
-        Orders.user_id == get_user_id(),
+        Orders.user_id == user_uuid,   # ✅ Используем UUID
         Orders.date >= start
     ).all()
     
@@ -343,7 +460,7 @@ def get_returns(
         chart_data.append({"date": d.strftime("%d.%m"), "value": day_ret})
     chart_data.reverse()
 
-    # 5. ТОП-5 возвращаемых товаров — БЕЗ func.first(), БЕЗ GROUP BY с агрегатами
+    # 5. ТОП-5 возвращаемых товаров
     from collections import Counter
     sku_counter = Counter()
     sku_reasons = {}
@@ -357,7 +474,8 @@ def get_returns(
     
     top_list = []
     for sku, qty in top_5_skus:
-        prod = db.query(Products).filter(Products.sku == sku, Products.user_id == get_user_id()).first()
+        # ✅ Фильтруем товары по user_uuid
+        prod = db.query(Products).filter(Products.sku == sku, Products.user_id == user_uuid).first()
         reason = sku_reasons.get(sku) or "Не указана"
         top_list.append({
             "sku": sku,

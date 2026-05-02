@@ -10,7 +10,8 @@ class User(Base):
     
     # ✅ Тип UUID для первичного ключа
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    ozon_seller_id = Column(String, nullable=False)
+    ozon_seller_id = Column(String, nullable=False, unique=True)  # ✅ Добавлено unique=True
+    hashed_password = Column(String, nullable=False)              # ✅ НОВОЕ ПОЛЕ ДЛЯ ХЕША
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationships
