@@ -208,39 +208,58 @@ def get_stock(
 def get_logistics(
     period: int = Query(30),
     logistics: str = Query("both"),
-    user_id: str = Depends(get_current_user),  # ✅ Получаем ID из токена
+    user_id: str = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     from uuid import UUID
-    user_uuid = UUID(user_id)  # ✅ Конвертируем строку в UUID
+    from collections import defaultdict
     
+    user_uuid = UUID(user_id)
     start = date.today() - timedelta(days=period)
-    orders = db.query(Orders).filter(Orders.user_id == user_uuid, Orders.date >= start)
+    
+    # 1. Загружаем заказы
+    orders_query = db.query(Orders).filter(
+        Orders.user_id == user_uuid, 
+        Orders.date >= start
+    )
     if logistics != "both":
-        orders = orders.filter(Orders.logistics_type == logistics)
+        orders_query = orders_query.filter(Orders.logistics_type == logistics)
         
-    all_orders = orders.all()
-    fbo = [o for o in all_orders if o.logistics_type == "FBO"]
-    fbs = [o for o in all_orders if o.logistics_type == "FBS"]
+    all_orders = orders_query.all()
     
-    # ✅ РЕАЛЬНЫЕ РАСХОДЫ: FBO ~150₽ за заказ, FBS ~220₽ за заказ
-    fbo_cost = len(fbo) * 150
-    fbs_cost = len(fbs) * 220
+    # Разделяем на списки для удобства подсчёта расходов
+    fbo_orders = [o for o in all_orders if o.logistics_type == "FBO"]
+    fbs_orders = [o for o in all_orders if o.logistics_type == "FBS"]
     
+    # 2. Расчёт расходов (можно сделать динамическим, если есть поле cost в Orders)
+    # Пока оставляем фиксированные ставки, как в твоём коде
+    fbo_cost = len(fbo_orders) * 150
+    fbs_cost = len(fbs_orders) * 220
+    
+    # 3. ✅ ИСПРАВЛЕНИЕ ГРАФИКА: Заполняем ВСЕ дни периода
+    daily_fbo = defaultdict(int)
+    daily_fbs = defaultdict(int)
+    
+    for o in all_orders:
+        if o.logistics_type == "FBO":
+            daily_fbo[o.date] += 1
+        elif o.logistics_type == "FBS":
+            daily_fbs[o.date] += 1
+            
     chart = []
-    for i in range(min(period, 7)):
-        d = date.today() - timedelta(days=i)
+    for i in range(period):
+        d = start + timedelta(days=i)
         chart.append({
-            "date": d.strftime("%d.%m"),
-            "fbo": len([o for o in fbo if o.date == d]),
-            "fbs": len([o for o in fbs if o.date == d])
+            "date": d.isoformat(),  # Используем ISO формат для корректной сортировки на фронтенде
+            "fbo": daily_fbo.get(d, 0),
+            "fbs": daily_fbs.get(d, 0)
         })
-    chart.reverse()
+    # Данные уже идут в хронологическом порядке, reverse() не нужен
         
     return LogisticsResponse(
-        total_orders_fbo=len(fbo),
-        total_orders_fbs=len(fbs),
-        avg_delivery_time_fbo=2.8,
+        total_orders_fbo=len(fbo_orders),
+        total_orders_fbs=len(fbs_orders),
+        avg_delivery_time_fbo=2.8,  # Можно заменить на реальный расчёт, если есть дата доставки
         avg_delivery_time_fbs=4.1,
         total_logistics_cost=fbo_cost + fbs_cost,
         logistics_cost_fbo=fbo_cost,
