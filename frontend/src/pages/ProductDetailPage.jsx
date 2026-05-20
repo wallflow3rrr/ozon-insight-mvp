@@ -20,7 +20,6 @@ const ProductDetailPage = () => {
       setLoading(true);
       setError(null);
       try {
-        // ✅ Запрос идет с SKU из URL
         const data = await api.getProductDetail(sku, period);
         setProductData(data);
       } catch (err) {
@@ -40,7 +39,7 @@ const ProductDetailPage = () => {
     return (
       <div className="p-6 text-center">
         <h2 className="text-xl font-bold text-red-600 mb-4">{error || "Данные не найдены"}</h2>
-        <Button onClick={() => navigate('/dashboard')}>Вернуться на дашборд</Button>
+        <Button onClick={() => navigate('/dashboard')} variant="secondary">Вернуться на дашборд</Button>
       </div>
     );
   }
@@ -68,28 +67,32 @@ const ProductDetailPage = () => {
         <Card>
           <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Выручка</h3>
           <p className="text-2xl font-bold text-blue-600 dark:text-blue-400 mt-1">
-            {productData.revenue?.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+            {productData.total_revenue?.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
           </p>
         </Card>
         <Card>
           <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Продано (шт.)</h3>
-          <p className="text-2xl font-bold text-green-600 dark:text-green-400 mt-1">{productData.quantity_sold}</p>
+          <p className="text-2xl font-bold text-green-600 dark:text-green-400 mt-1">
+            {productData.total_quantity}
+          </p>
         </Card>
         <Card>
           <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Остаток на складе</h3>
-          <p className="text-2xl font-bold text-purple-600 dark:text-purple-400 mt-1">{productData.stock} шт.</p>
+          <p className="text-2xl font-bold text-purple-600 dark:text-purple-400 mt-1">
+            {productData.current_stock} шт.
+          </p>
         </Card>
         <Card>
           <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Тип логистики</h3>
           <p className="text-2xl font-bold text-gray-800 dark:text-gray-200 mt-1">
-            {productData.logistics || 'FBO'}
+            {productData.logistics_type || 'FBO'}
           </p>
         </Card>
       </div>
 
       <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-md">
         <h3 className="text-lg font-semibold mb-4 text-gray-800 dark:text-gray-100">Динамика продаж</h3>
-        <RevenueChart data={{ revenue_chart: productData.sales_chart }} />
+        <RevenueChart data={{ revenue_chart: productData.revenue_chart }} />
       </div>
     </div>
   );

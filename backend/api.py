@@ -268,50 +268,72 @@ def get_logistics(
         cost_by_type=[{"type": "FBO", "cost": fbo_cost}, {"type": "FBS", "cost": fbs_cost}]
     )
 
-@router.get("/api/product/{sku}", response_model=ProductDetailResponse)
+@router.get("/api/product/{sku}")
 def get_product(
     sku: str,
     period: int = Query(30),
-    user_id: str = Depends(get_current_user),  # ✅ Получаем ID из токена
+    user_id: str = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     from uuid import UUID
-    user_uuid = UUID(user_id)  # ✅ Конвертация для PostgreSQL
+    from collections import defaultdict
     
+    user_uuid = UUID(user_id)
     start = date.today() - timedelta(days=period)
     
-    # Ищем товар с учётом владельца
-    prod = db.query(Products).filter(
-        Products.sku == sku, 
+    # 1. Ищем товар
+    product = db.query(Products).filter(
+        Products.sku == sku,
         Products.user_id == user_uuid
     ).first()
     
-    if not prod:
+    if not product:
         raise HTTPException(status_code=404, detail="Товар не найден")
-        
+    
+    # 2. Загружаем заказы этого товара за период
     orders = db.query(Orders).filter(
-        Orders.sku == sku, 
-        Orders.user_id == user_uuid, 
+        Orders.sku == sku,
+        Orders.user_id == user_uuid,
         Orders.date >= start
     ).all()
     
-    revenue = sum(o.revenue for o in orders)
-    qty = sum(o.quantity for o in orders)
+    # 3. Считаем метрики
+    total_revenue = sum(o.revenue for o in orders)
+    total_quantity = sum(o.quantity for o in orders)
     
-    chart = []
-    for i in range(min(period, 14)):
-        d = date.today() - timedelta(days=i)
-        day_rev = sum(o.revenue for o in orders if o.date == d)
-        chart.append({"date": d.isoformat(), "value": float(day_rev)})
-        
-    return ProductDetailResponse(
-        sku=prod.sku, 
-        name=prod.name, 
-        revenue=float(revenue),
-        quantity_sold=qty, 
-        stock=prod.stock, 
-        sales_chart=chart
-    )
+    # 4. ✅ ИСПРАВЛЕНИЕ ГРАФИКА: Заполняем ВСЕ дни периода
+    daily_revenue = defaultdict(float)
+    for o in orders:
+        daily_revenue[o.date] += float(o.revenue)
+    
+    revenue_chart = []
+    for i in range(period):
+        d = start + timedelta(days=i)
+        revenue_chart.append({
+            "date": d.isoformat(),
+            "value": daily_revenue.get(d, 0.0)
+        })
+    
+    # 5. Последние заказы (опционально)
+    recent_orders = []
+    for o in sorted(orders, key=lambda x: x.date, reverse=True)[:10]:
+        recent_orders.append({
+            "date": o.date.isoformat(),
+            "quantity": o.quantity,
+            "revenue": float(o.revenue),
+            "status": o.status
+        })
+    
+    return {
+        "sku": product.sku,
+        "name": product.name,
+        "current_stock": product.stock,
+        "logistics_type": product.logistics_type,
+        "total_revenue": float(total_revenue),
+        "total_quantity": total_quantity,
+        "revenue_chart": revenue_chart,
+        "recent_orders": recent_orders
+    }
 
 @router.get("/api/export")
 def export_report(
