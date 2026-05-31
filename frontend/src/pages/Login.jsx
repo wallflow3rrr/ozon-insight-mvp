@@ -81,7 +81,7 @@ const Login = () => {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
-              placeholder="admin"
+              placeholder="login"
               required
               autoComplete="username"
             />
@@ -112,9 +112,6 @@ const Login = () => {
           </button>
         </form>
 
-        <div className="mt-6 text-center text-sm text-gray-500 dark:text-gray-400">
-          <p>Демо-доступ: admin / admin</p>
-        </div>
       </div>
     </div>
   );

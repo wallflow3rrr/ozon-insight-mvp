@@ -44,18 +44,12 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> str:
 @router.post("/login", response_model=TokenResponse)
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     """
-    Вход в систему. Принимает username/password из формы.
-    Сравнивает логин с ADMIN_USERNAME из .env, ищет юзера в БД, проверяет пароль.
+    Вход в систему. Ищет пользователя по введенному логину в БД.
     """
-    admin_username = os.getenv("ADMIN_USERNAME", "admin")
-    admin_ozon_id = os.getenv("ADMIN_OZON_ID", "admin_internal_user")
-
-    # 1. Проверяем логин
-    if form_data.username != admin_username:
-        raise HTTPException(status_code=401, detail="Неверный логин или пароль")
-
-    # 2. Ищем пользователя в БД
-    user = db.query(User).filter(User.ozon_seller_id == admin_ozon_id).first()
+    # 1. Ищем пользователя сразу по введенному логину (поле ozon_seller_id)
+    user = db.query(User).filter(User.ozon_seller_id == form_data.username).first()
+    
+    # 2. Проверяем наличие и корректность пароля
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
@@ -63,8 +57,8 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
     access_token = create_access_token(data={"sub": str(user.id)})
     refresh_token = create_refresh_token(data={"sub": str(user.id)})
 
-    # 4. Сохраняем refresh_token в БД (для контроля сессий и выхода)
-    expires_at = datetime.utcnow() + timedelta(minutes=30)  # Время жизни access token
+    # 4. Сохраняем/обновляем токены в БД
+    expires_at = datetime.utcnow() + timedelta(minutes=30)
     
     token_record = db.query(Tokens).filter(Tokens.user_id == user.id).first()
     if token_record:
@@ -76,7 +70,7 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
             user_id=user.id,
             access_token=access_token,
             refresh_token=refresh_token,
-            expires_at=expires_at  # ✅ Добавлено время истечения
+            expires_at=expires_at
         ))
     db.commit()
 

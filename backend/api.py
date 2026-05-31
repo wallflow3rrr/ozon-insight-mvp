@@ -38,7 +38,6 @@ def trigger_sync(
     user_uuid = UUID(user_id)
     start_time = datetime.utcnow()
     
-    # 1. Создаём запись о начале синхронизации
     sync_record = SyncHistory(
         user_id=user_uuid,
         start_time=start_time,
@@ -46,25 +45,20 @@ def trigger_sync(
         error_message=None
     )
     db.add(sync_record)
-    db.commit() # Фиксируем начало
+    db.commit()
     
     try:
-        #  РЕАЛЬНАЯ РАБОТА: Считаем данные в БД для отчёта
         orders_count = db.query(Orders).filter(Orders.user_id == user_uuid).count()
         returns_count = db.query(Returns).filter(Returns.user_id == user_uuid).count()
         products_count = db.query(Products).filter(Products.user_id == user_uuid).count()
         
-        # Имитация небольшой задержки обработки (как будто парсим файлы)
         import time
         time.sleep(1) 
         
         end_time = datetime.utcnow()
         
-        # 2. Обновляем запись об успешном завершении с деталями
         sync_record.end_time = end_time
         sync_record.status = "completed"
-        # Можно записать отчет в error_message или добавить поле report_summary в модель, 
-        # но пока оставим просто статус completed
         db.commit()
         
         return {
@@ -74,7 +68,6 @@ def trigger_sync(
         }
         
     except Exception as e:
-        # 3. Обработка ошибки
         sync_record.end_time = datetime.utcnow()
         sync_record.status = "failed"
         sync_record.error_message = str(e)
@@ -86,10 +79,9 @@ def trigger_sync(
 def get_dashboard(
     period: int = Query(30, ge=1, le=365),
     logistics: str = Query("both"),
-    user_id: str = Depends(get_current_user),  # Приходит как строка
+    user_id: str = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # ✅ Явно конвертируем строку из токена в UUID для PostgreSQL
     user_uuid = UUID(user_id)
     
     from datetime import date, timedelta
@@ -98,11 +90,9 @@ def get_dashboard(
     
     start_date = date.today() - timedelta(days=period)
     
-    # 🔍 Отладка: смотрим, сколько всего заказов у этого юзера в БД
     total_in_db = db.query(Orders).filter(Orders.user_id == user_uuid).count()
-    print(f"🔍 DEBUG: Всего заказов в БД для user {user_uuid}: {total_in_db}")
+    print(f"DEBUG: Всего заказов в БД для user {user_uuid}: {total_in_db}")
     
-    # 1. Загружаем заказы (убрали фильтр status, чтобы точно получить данные)
     orders_query = db.query(Orders).filter(
         Orders.user_id == user_uuid,
         Orders.date >= start_date
@@ -111,20 +101,17 @@ def get_dashboard(
         orders_query = orders_query.filter(Orders.logistics_type == logistics)
     orders = orders_query.all()
     
-    print(f"🔍 DEBUG: Найдено заказов за период: {len(orders)}")
+    print(f"DEBUG: Найдено заказов за период: {len(orders)}")
 
-    # Если данных нет — возвращаем 404
     if not orders:
         raise HTTPException(
             status_code=404,
             detail=f"Нет данных за период {period} дней. Проверьте seed.py и user_id."
         )
     
-    # 2. Считаем метрики
     total_revenue = sum(o.revenue for o in orders)
     total_orders = len(orders)
     
-    # Возвраты
     order_ids = [o.order_id for o in orders]
     returns = db.query(Returns).filter(
         Returns.user_id == user_uuid,
@@ -135,12 +122,10 @@ def get_dashboard(
     avg_check = round(float(total_revenue / total_orders), 2) if total_orders > 0 else 0.0
     return_rate = round((total_returns / total_orders * 100), 2) if total_orders > 0 else 0.0
     
-    # 3. График по дням
     daily_revenue = defaultdict(float)
     for o in orders:
         daily_revenue[o.date] += float(o.revenue)
 
-# Создаём полный список дней в периоде
     revenue_chart = []
     for i in range(period):
         d = start_date + timedelta(days=i)
@@ -149,7 +134,6 @@ def get_dashboard(
             "value": daily_revenue.get(d, 0.0)  # 0 если не было заказов
         })
     
-    # 4. ТОП-5 товаров
     top_query = db.query(Orders.sku, func.sum(Orders.revenue).label("rev")).filter(
         Orders.user_id == user_uuid, Orders.date >= start_date
     ).group_by(Orders.sku).order_by(func.sum(Orders.revenue).desc()).limit(5)
@@ -168,24 +152,22 @@ def get_dashboard(
 
 @router.get("/api/stock", response_model=StockResponse)
 def get_stock(
-    period: int = Query(30),  # period не используется для остатков, но оставляем для совместимости
+    period: int = Query(30),
     logistics: str = Query("both"),
-    user_id: str = Depends(get_current_user),  # ✅ Получаем ID из токена
+    user_id: str = Depends(get_current_user), 
     db: Session = Depends(get_db)
 ):
     from uuid import UUID
-    user_uuid = UUID(user_id)  # ✅ Конвертируем строку в UUID для PostgreSQL
+    user_uuid = UUID(user_id)
     
-    # Запрос к таблице Products
     prods = db.query(Products).filter(Products.user_id == user_uuid)
     if logistics != "both":
         prods = prods.filter(Products.logistics_type == logistics)
     prods = prods.all()
     
-    # ✅ Порог низкого остатка: < 10 штук
     LOW_STOCK_THRESHOLD = 10
     
-    total_val = sum(p.stock * 500 for p in prods)  # 500 — средняя цена для оценки
+    total_val = sum(p.stock * 500 for p in prods)
     low = [p for p in prods if p.stock < LOW_STOCK_THRESHOLD]
     out = [p for p in prods if p.stock == 0]
     
@@ -217,7 +199,6 @@ def get_logistics(
     user_uuid = UUID(user_id)
     start = date.today() - timedelta(days=period)
     
-    # 1. Загружаем заказы
     orders_query = db.query(Orders).filter(
         Orders.user_id == user_uuid, 
         Orders.date >= start
@@ -227,16 +208,12 @@ def get_logistics(
         
     all_orders = orders_query.all()
     
-    # Разделяем на списки для удобства подсчёта расходов
     fbo_orders = [o for o in all_orders if o.logistics_type == "FBO"]
     fbs_orders = [o for o in all_orders if o.logistics_type == "FBS"]
     
-    # 2. Расчёт расходов (можно сделать динамическим, если есть поле cost в Orders)
-    # Пока оставляем фиксированные ставки, как в твоём коде
     fbo_cost = len(fbo_orders) * 150
     fbs_cost = len(fbs_orders) * 220
     
-    # 3. ✅ ИСПРАВЛЕНИЕ ГРАФИКА: Заполняем ВСЕ дни периода
     daily_fbo = defaultdict(int)
     daily_fbs = defaultdict(int)
     
@@ -250,16 +227,15 @@ def get_logistics(
     for i in range(period):
         d = start + timedelta(days=i)
         chart.append({
-            "date": d.isoformat(),  # Используем ISO формат для корректной сортировки на фронтенде
+            "date": d.isoformat(),
             "fbo": daily_fbo.get(d, 0),
             "fbs": daily_fbs.get(d, 0)
         })
-    # Данные уже идут в хронологическом порядке, reverse() не нужен
         
     return LogisticsResponse(
         total_orders_fbo=len(fbo_orders),
         total_orders_fbs=len(fbs_orders),
-        avg_delivery_time_fbo=2.8,  # Можно заменить на реальный расчёт, если есть дата доставки
+        avg_delivery_time_fbo=2.8,
         avg_delivery_time_fbs=4.1,
         total_logistics_cost=fbo_cost + fbs_cost,
         logistics_cost_fbo=fbo_cost,
@@ -281,7 +257,6 @@ def get_product(
     user_uuid = UUID(user_id)
     start = date.today() - timedelta(days=period)
     
-    # 1. Ищем товар
     product = db.query(Products).filter(
         Products.sku == sku,
         Products.user_id == user_uuid
@@ -290,18 +265,15 @@ def get_product(
     if not product:
         raise HTTPException(status_code=404, detail="Товар не найден")
     
-    # 2. Загружаем заказы этого товара за период
     orders = db.query(Orders).filter(
         Orders.sku == sku,
         Orders.user_id == user_uuid,
         Orders.date >= start
     ).all()
     
-    # 3. Считаем метрики
     total_revenue = sum(o.revenue for o in orders)
     total_quantity = sum(o.quantity for o in orders)
     
-    # 4. ✅ ИСПРАВЛЕНИЕ ГРАФИКА: Заполняем ВСЕ дни периода
     daily_revenue = defaultdict(float)
     for o in orders:
         daily_revenue[o.date] += float(o.revenue)
@@ -314,7 +286,6 @@ def get_product(
             "value": daily_revenue.get(d, 0.0)
         })
     
-    # 5. Последние заказы (опционально)
     recent_orders = []
     for o in sorted(orders, key=lambda x: x.date, reverse=True)[:10]:
         recent_orders.append({
@@ -342,11 +313,11 @@ def export_report(
     period: int = Query(30),
     logistics: str = Query("both"),
     sku: str = Query(None),
-    user_id: str = Depends(get_current_user),  # ✅ Защита токеном
+    user_id: str = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     from uuid import UUID
-    user_uuid = UUID(user_id)  # ✅ Конвертация для PostgreSQL
+    user_uuid = UUID(user_id)
     
     import pandas as pd
     import io
@@ -358,7 +329,6 @@ def export_report(
     filename = "report.xlsx"
     
     if scope == "dashboard":
-        # ✅ Запрашиваем заказы напрямую (так как metrics_summary пуст)
         orders_q = db.query(Orders).filter(
             Orders.user_id == user_uuid,
             Orders.date >= start
@@ -370,7 +340,6 @@ def export_report(
         if not orders:
             raise HTTPException(status_code=404, detail="Нет данных для экспорта")
 
-        # Агрегация по дням
         from collections import defaultdict
         daily = defaultdict(lambda: {"revenue": 0.0, "count": 0})
         for o in orders:
@@ -390,7 +359,6 @@ def export_report(
             total_rev += vals["revenue"]
             total_cnt += vals["count"]
 
-        # Итоговая строка
         avg_total = total_rev / total_cnt if total_cnt > 0 else 0
         data.insert(0, {
             "Дата": "ИТОГО",
@@ -401,7 +369,7 @@ def export_report(
         filename = f"dashboard_{period}_{logistics}.xlsx"
 
     elif scope == "stock":
-        prods = db.query(Products).filter(Products.user_id == user_uuid)  # ✅
+        prods = db.query(Products).filter(Products.user_id == user_uuid)
         if logistics != "both": 
             prods = prods.filter(Products.logistics_type == logistics)
         prods = prods.all()
@@ -413,7 +381,7 @@ def export_report(
         filename = f"stock_{period}_{logistics}.xlsx"
 
     elif scope == "logistics":
-        orders = db.query(Orders).filter(Orders.user_id == user_uuid, Orders.date >= start)  # ✅
+        orders = db.query(Orders).filter(Orders.user_id == user_uuid, Orders.date >= start) 
         if logistics != "both": 
             orders = orders.filter(Orders.logistics_type == logistics)
         orders = orders.all()
@@ -431,7 +399,7 @@ def export_report(
         filename = f"logistics_{period}_{logistics}.xlsx"
 
     elif scope == "returns":
-        returns = db.query(Returns).filter(Returns.user_id == user_uuid, Returns.date >= start).all()  # ✅
+        returns = db.query(Returns).filter(Returns.user_id == user_uuid, Returns.date >= start).all() 
         if not returns:
             raise HTTPException(status_code=404, detail="Нет данных для экспорта")
         data = [
@@ -488,33 +456,52 @@ def export_report(
 def get_returns(
     period: int = Query(30),
     logistics: str = Query("both"),
-    user_id: str = Depends(get_current_user),  # ✅ Получаем ID из токена
+    user_id: str = Depends(get_current_user), 
     db: Session = Depends(get_db)
 ):
     from uuid import UUID
-    user_uuid = UUID(user_id)  # ✅ Конвертируем строку в UUID для PostgreSQL
-
+    user_uuid = UUID(user_id)
     start = date.today() - timedelta(days=period)
     
-    # 1. Загружаем ВСЕ возвраты за период
-    returns = db.query(Returns).filter(
-        Returns.user_id == user_uuid,  # ✅ Используем UUID
-        Returns.date >= start
-    ).all()
-    
-    # 2. Загружаем заказы для расчёта доли возвратов
-    orders = db.query(Orders).filter(
-        Orders.user_id == user_uuid,   # ✅ Используем UUID
+    # 1. Сначала фильтруем ЗАКАЗЫ по логистике, чтобы получить нужные order_id
+    orders_q = db.query(Orders).filter(
+        Orders.user_id == user_uuid,
         Orders.date >= start
-    ).all()
+    )
+    if logistics != "both":
+        orders_q = orders_q.filter(Orders.logistics_type == logistics)
     
-    # 3. Считаем метрики на уровне Python
+    # Получаем список ID отфильтрованных заказов
+    filtered_order_ids = [o.order_id for o in orders_q.all()]
+    
+    # 2. Фильтруем ВОЗВРАТЫ: берем только те, что принадлежат отфильтрованным заказам
+    returns_q = db.query(Returns).filter(
+        Returns.user_id == user_uuid,
+        Returns.date >= start
+    )
+    
+    # Если список не пустой — фильтруем по нему, иначе возвратов не будет
+    if filtered_order_ids:
+        returns_q = returns_q.filter(Returns.order_id.in_(filtered_order_ids))
+    
+    returns = returns_q.all()
+    
+    # 3. Для расчета доли возвратов используем ТО ЖЕ количество заказов (чтобы знаменатель соответствовал числителю)
+    orders = db.query(Orders).filter(
+        Orders.user_id == user_uuid,
+        Orders.date >= start
+    )
+    if logistics != "both":
+        orders = orders.filter(Orders.logistics_type == logistics)
+    orders = orders.all()
+    
     total_returns_count = sum(r.quantity for r in returns)
     total_return_amount = sum(r.amount for r in returns)
     orders_count = len(orders)
+    
+    # Защита от деления на ноль
     return_rate = round((total_returns_count / orders_count * 100), 2) if orders_count > 0 else 0.0
 
-    # 4. График возвратов по дням
     from collections import defaultdict
     daily_returns = defaultdict(int)
     for r in returns:
@@ -522,13 +509,12 @@ def get_returns(
 
     chart_data = []
     for i in range(period):
-        d = start + timedelta(days=i)  # Генерируем даты строго от начала периода
+        d = start + timedelta(days=i)
         chart_data.append({
-            "date": d.isoformat(),  # Формат YYYY-MM-DD (стандарт для графиков)
-            "value": daily_returns.get(d, 0)  # 0, если возвратов в этот день не было
+            "date": d.isoformat(),
+            "value": daily_returns.get(d, 0) 
         })
 
-    # 5. ТОП-5 возвращаемых товаров
     from collections import Counter
     sku_counter = Counter()
     sku_reasons = {}
@@ -542,7 +528,6 @@ def get_returns(
     
     top_list = []
     for sku, qty in top_5_skus:
-        # ✅ Фильтруем товары по user_uuid
         prod = db.query(Products).filter(Products.sku == sku, Products.user_id == user_uuid).first()
         reason = sku_reasons.get(sku) or "Не указана"
         top_list.append({
